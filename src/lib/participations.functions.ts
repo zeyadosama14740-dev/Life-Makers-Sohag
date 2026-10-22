@@ -1,0 +1,30 @@
+import { createServerFn } from "@tanstack/react-start";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+export const getParticipationData=createServerFn({method:"POST"}).middleware([requireSupabaseAuth]).handler(async({context})=>{
+ const {data:roles,error}=await context.supabase.from("user_roles").select("role").eq("user_id",context.userId);
+ if(error)throw error;
+ const admin=roles?.some(r=>r.role==="admin");const manager=roles?.some(r=>r.role==="center_manager");
+ if(!admin&&!manager)throw new Error("المشاركات الفردية متاحة للمسؤولين ومديري المراكز فقط");
+ const {data:centers,error:centerError}=await context.supabase.from("user_center_access").select("center").eq("user_id",context.userId);
+ if(centerError)throw centerError;
+ const access={isAdmin:!!admin,centers:(centers??[]).map(c=>c.center)};
+ const {getRawSources}=await import("./sheets/fetch.server");
+ const {buildVolunteerProfiles,STAGES,canSeeCenter}=await import("./sheets/volunteers");
+ const {mappedGrid}=await import("./sheets/source-config");
+ const {normalizeArabic}=await import("./sheets/normalize");
+ const raw=await getRawSources();
+ const grids=raw.flatMap(s=>s.tabs.flatMap(t=>{
+   const config=s.config?.tabs?.[t.title];
+   if(config && !["auto","volunteers","placement"].includes(config.kind))return [];
+   const title=config?.stage??(config?.kind==="volunteers"?"جذب":config?.kind==="placement"?"تسكين":t.title);
+  const stage=STAGES.find(x=>normalizeArabic(x)===normalizeArabic(title));return stage?[{stage,grid:mappedGrid(t.grid,config),sourceId:s.id}]:[];
+ }));
+ const profiles=buildVolunteerProfiles(grids);
+ const {data:identities,error:identityError}=await context.supabase.from("volunteer_identities").select("id,identity_key");
+ if(identityError)throw identityError;
+ const ids=new Map((identities??[]).map(p=>[p.identity_key,p.id]));
+ profiles.forEach(p=>{p.volunteerId=ids.get(p.key);});
+ const {parseParticipations}=await import("./sheets/participations");
+ const rows=parseParticipations(raw,profiles).filter(r=>canSeeCenter(access,r.center));
+ return {rows};
+});

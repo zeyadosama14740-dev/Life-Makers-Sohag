@@ -1,0 +1,16 @@
+ALTER TABLE public.data_sources ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'google_sheets', ADD COLUMN IF NOT EXISTS config jsonb NOT NULL DEFAULT '{}'::jsonb, ADD COLUMN IF NOT EXISTS import_tabs jsonb, ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+CREATE TABLE public.volunteer_identities (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), identity_key text NOT NULL UNIQUE, center text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+GRANT SELECT ON public.volunteer_identities TO authenticated;
+GRANT ALL ON public.volunteer_identities TO service_role;
+ALTER TABLE public.volunteer_identities ENABLE ROW LEVEL SECURITY;
+CREATE POLICY identity_scope ON public.volunteer_identities FOR SELECT TO authenticated USING (public.has_role(auth.uid(), 'admin') OR (public.has_role(auth.uid(), 'center_manager') AND EXISTS (SELECT 1 FROM public.user_center_access a WHERE a.user_id = auth.uid() AND a.center = volunteer_identities.center)));
+CREATE TABLE public.audit_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), actor_id uuid, action text NOT NULL, entity_id text NOT NULL, source_id uuid, center text, previous jsonb, next jsonb, result text NOT NULL DEFAULT 'success', origin text NOT NULL DEFAULT 'app', created_at timestamptz NOT NULL DEFAULT now());
+GRANT SELECT ON public.audit_events TO authenticated;
+GRANT ALL ON public.audit_events TO service_role;
+ALTER TABLE public.audit_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY audit_admin ON public.audit_events FOR SELECT TO authenticated USING (public.has_role(auth.uid(), 'admin'));
+CREATE TABLE public.source_observations (source_id uuid PRIMARY KEY REFERENCES public.data_sources(id), fingerprint text NOT NULL, observed_at timestamptz NOT NULL DEFAULT now());
+GRANT ALL ON public.source_observations TO service_role;
+ALTER TABLE public.source_observations ENABLE ROW LEVEL SECURITY;
+COMMENT ON TABLE public.volunteer_identities IS 'Persistent application UUIDs for source identities; no personal fields exposed anonymously.';
+COMMENT ON TABLE public.audit_events IS 'Append-only through application handlers; authenticated callers cannot mutate the audit history.';
